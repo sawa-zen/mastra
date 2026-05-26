@@ -1,8 +1,8 @@
 {
-  "name": "zensuke",
+  "name": "mastra",
   "version": "0.1.0",
   "private": true,
-  "description": "個人用の相棒 AI (Mastra + ollama gemma4:e2b)",
+  "description": "個人用の Mastra ランタイム。agent 定義をホストする (現状: zensuke)。",
   "type": "module",
   "scripts": {
     "dev": "mastra dev",
