@@ -13,12 +13,12 @@
     "@mastra/core": "latest",
     "@mastra/libsql": "latest",
     "@mastra/memory": "latest",
+    "mastra": "latest",
     "ollama-ai-provider-v2": "latest",
     "zod": "^4"
   },
   "devDependencies": {
     "@types/node": "^22",
-    "mastra": "latest",
     "typescript": "^5"
   }
 }
