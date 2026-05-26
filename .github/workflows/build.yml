@@ -27,7 +27,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/sawa-zen/zensuke
+          images: ghcr.io/sawa-zen/mastra
           tags: |
             type=raw,value=latest
             type=sha,prefix=
