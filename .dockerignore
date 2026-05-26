@@ -1,0 +1,14 @@
+node_modules/
+.mastra/
+dist/
+.git/
+.github/
+*.log
+.env
+.env.local
+.DS_Store
+README.md
+Dockerfile
+.dockerignore
+db.sqlite
+db.sqlite-journal
