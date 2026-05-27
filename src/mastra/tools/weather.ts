@@ -43,33 +43,41 @@ export const weatherTool = createTool({
     weatherCode: z.number(),
   }),
   execute: async ({ location }) => {
-
-    const geoUrl = new URL("https://geocoding-api.open-meteo.com/v1/search");
-    geoUrl.searchParams.set("name", location);
-    geoUrl.searchParams.set("count", "1");
-    geoUrl.searchParams.set("language", "ja");
+    // Nominatim (OpenStreetMap) で geocoding。「江東区」のような行政区画
+    // レベルの地名も解決できる。Usage Policy で User-Agent 必須・1req/s 制限。
+    const geoUrl = new URL("https://nominatim.openstreetmap.org/search");
+    geoUrl.searchParams.set("q", location);
     geoUrl.searchParams.set("format", "json");
+    geoUrl.searchParams.set("limit", "1");
+    geoUrl.searchParams.set("accept-language", "ja");
 
-    const geoRes = await fetch(geoUrl);
+    const geoRes = await fetch(geoUrl, {
+      headers: {
+        "User-Agent": "mastra-zensuke/0.1 (https://github.com/sawa-zen/mastra)",
+      },
+    });
     if (!geoRes.ok) {
       throw new Error(`geocoding failed: ${geoRes.status} ${geoRes.statusText}`);
     }
-    const geo = (await geoRes.json()) as {
-      results?: Array<{
-        name: string;
-        country?: string;
-        latitude: number;
-        longitude: number;
-      }>;
-    };
-    const hit = geo.results?.[0];
+    const geo = (await geoRes.json()) as Array<{
+      lat: string;
+      lon: string;
+      name?: string;
+      display_name: string;
+    }>;
+    const hit = geo[0];
     if (!hit) {
       throw new Error(`地名が見つからない: ${location}`);
     }
+    const latitude = Number(hit.lat);
+    const longitude = Number(hit.lon);
+    const parts = hit.display_name.split(",").map((s) => s.trim());
+    const resolvedName = hit.name || parts[0] || location;
+    const country = parts[parts.length - 1];
 
     const weatherUrl = new URL("https://api.open-meteo.com/v1/forecast");
-    weatherUrl.searchParams.set("latitude", String(hit.latitude));
-    weatherUrl.searchParams.set("longitude", String(hit.longitude));
+    weatherUrl.searchParams.set("latitude", String(latitude));
+    weatherUrl.searchParams.set("longitude", String(longitude));
     weatherUrl.searchParams.set(
       "current",
       "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m",
@@ -94,8 +102,8 @@ export const weatherTool = createTool({
 
     const code = data.current.weather_code;
     return {
-      location: hit.name,
-      country: hit.country,
+      location: resolvedName,
+      country,
       temperatureC: data.current.temperature_2m,
       apparentTemperatureC: data.current.apparent_temperature,
       humidity: data.current.relative_humidity_2m,
