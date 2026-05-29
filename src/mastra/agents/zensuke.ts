@@ -2,62 +2,87 @@ import { readFile } from "node:fs/promises";
 import { Agent } from "@mastra/core/agent";
 import { Memory } from "@mastra/memory";
 import { LibSQLStore } from "@mastra/libsql";
-import { createOllama } from "ollama-ai-provider-v2";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { weatherTool } from "../tools/weather";
+import { createUpdateWorkingMemoryTool } from "../tools/workingMemory";
 
 const baseURL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
 const modelId = process.env.OLLAMA_MODEL ?? "gemma4:e2b";
 const databaseUrl = process.env.DATABASE_URL ?? "file:./db.sqlite";
-
+// instructions から working memory を読むための resourceId。
+// Studio/Playground では resourceId は agentId(=zensuke) になる。
+const resourceId = process.env.WORKING_MEMORY_RESOURCE_ID ?? "zensuke";
 // System Prompt は本番では ConfigMap でマウントしたファイルから読む。
-// ファイルが無いローカル開発時などは FALLBACK_INSTRUCTIONS を使う。
+// ファイルが無いローカル開発時などは BASE_INSTRUCTIONS を使う。
 const instructionsPath =
   process.env.INSTRUCTIONS_PATH ?? "/etc/zensuke/instructions.md";
 
-const FALLBACK_INSTRUCTIONS = `あなたは「ぜんすけ」というユーザーの相棒 AI です。
-ユーザー (sawa-zen) はデザイナー兼フロントエンドエンジニアです。
-短めに、率直に返答してください。
-わからないことは無理に答えず「わからない」と言ってください。
-
-# ワーキングメモリの扱い（厳守）
-ユーザーについての情報（名前・職種・興味関心・コミュニケーションの好み・進行中のことなど）を新しく知ったり更新したときは、必ず updateWorkingMemory ツールを「呼び出して」保存すること。
-- 返答の本文に updateWorkingMemory(...) のような関数呼び出しの書式を書いてはいけない。それは実行されない。
-- プロフィールの markdown 本文を返答に書き出してはいけない。保存は必ずツール呼び出しで行う。
-- 返答本文には、ユーザー向けの自然で短い一言だけを書く（例：「覚えておくね」）。`;
-
-const ollama = createOllama({
-  baseURL: `${baseURL}/api`,
-});
-
-export const zensuke = new Agent({
-  id: "zensuke",
-  name: "zensuke",
-  // リクエスト毎にファイルを読むことで、ConfigMap 更新後の会話から
-  // 新プロンプトが反映される（pod restart 不要）。
-  instructions: async () => {
-    try {
-      const content = (await readFile(instructionsPath, "utf8")).trim();
-      return content.length > 0 ? content : FALLBACK_INSTRUCTIONS;
-    } catch {
-      return FALLBACK_INSTRUCTIONS;
-    }
-  },
-  model: ollama(modelId),
-  tools: { weatherTool },
-  memory: new Memory({
-    storage: new LibSQLStore({ id: "zensuke-memory", url: databaseUrl }),
-    options: {
-      workingMemory: {
-        enabled: true,
-        scope: "resource",
-        template: `# ユーザープロフィール
+const WORKING_MEMORY_TEMPLATE = `# ユーザープロフィール
 - **名前**:
 - **職種**:
 - **興味・関心**:
 - **コミュニケーションの好み**:
 - **進行中のこと**:
-`,
-      },
+`;
+
+// ollama-ai-provider-v2 は Mastra 経由だと tool calling が通らないため、ollama の
+// OpenAI 互換エンドポイント(/v1)を標準の OpenAI 互換プロバイダ経由で使う。
+const ollama = createOpenAICompatible({
+  name: "ollama",
+  baseURL: `${baseURL}/v1`,
+  apiKey: "ollama",
+});
+
+const memory = new Memory({
+  storage: new LibSQLStore({ id: "zensuke-memory", url: databaseUrl }),
+  options: {
+    workingMemory: {
+      enabled: true,
+      scope: "resource",
+      template: WORKING_MEMORY_TEMPLATE,
     },
-  }),
+  },
+});
+
+const BASE_INSTRUCTIONS = `あなたは「ぜんすけ」という名前の AI アシスタントです。話し相手のユーザーを手伝います。
+短めに、率直に返答してください。わからないことは無理に答えず「わからない」と言ってください。
+
+# 記憶（最重要・必ず従う）
+ユーザーが自分について事実を述べたら（例:「私の名前は〜」「〜エンジニアです」「〜に興味がある」）、明示的に「覚えて」と言われなくても、その発話のたびに必ず update_working_memory ツールを呼び出すこと。memory 引数には、下記テンプレートの全項目を埋めた markdown 全文を渡す（不明な項目は空欄のまま）。既に分かっている項目も毎回含めること。
+「ぜんすけ」はあなた自身（AI）の名前なので、ユーザーの名前として記憶しないこと。
+
+テンプレート:
+${WORKING_MEMORY_TEMPLATE}`;
+
+export const zensuke = new Agent({
+  id: "zensuke",
+  name: "zensuke",
+  // ベースプロンプトは INSTRUCTIONS_PATH のファイル（本番は ConfigMap）から読む。
+  // 無ければ BASE_INSTRUCTIONS にフォールバック。
+  // あわせて保存済みプロフィールを system プロンプトに自前注入する（標準の自動 read
+  // 注入が本構成では効かないため）。会話をまたいだ記憶の引き継ぎはこの注入で実現する。
+  instructions: async () => {
+    let base = BASE_INSTRUCTIONS;
+    try {
+      const content = (await readFile(instructionsPath, "utf8")).trim();
+      if (content.length > 0) base = content;
+    } catch {
+      // ファイル無し → フォールバックを使う
+    }
+    try {
+      const saved = await memory.getWorkingMemory({ threadId: `wm-${resourceId}`, resourceId });
+      if (saved && saved.trim()) {
+        return `${base}\n\n# 現在記憶しているユーザー情報\n${saved.trim()}`;
+      }
+    } catch {
+      // 読めなければベースのみ
+    }
+    return base;
+  },
+  model: ollama(modelId),
+  tools: {
+    weatherTool,
+    updateWorkingMemory: createUpdateWorkingMemoryTool(memory),
+  },
+  memory,
 });

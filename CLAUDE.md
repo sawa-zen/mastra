@@ -20,17 +20,22 @@ npx tsc --noEmit # 型チェック（テスト/リント設定は無いのでこ
 
 Mastra ランタイム。`src/mastra/index.ts` がエントリで `Mastra` インスタンスに agent を登録する。
 
-- **agent**: `src/mastra/agents/`。`new Agent({ model, tools, memory })`。LLM は `ollama-ai-provider-v2` 経由で Ollama を叩く（`createOllama({ baseURL })`）。新しい agent は `index.ts` の `agents` マップに登録する。
+- **agent**: `src/mastra/agents/`。`new Agent({ model, tools, memory })`。LLM は **`@ai-sdk/openai-compatible` 経由で Ollama の OpenAI 互換エンドポイント (`/v1`) を叩く**（`createOpenAICompatible({ baseURL: ".../v1" })`）。新しい agent は `index.ts` の `agents` マップに登録する。
 - **tool**: `src/mastra/tools/`。`createTool({ id, inputSchema, outputSchema, execute })`（zod スキーマ）。agent の `tools` フィールドで登録する。
 - **memory**: `@mastra/memory` + `LibSQLStore`（SQLite）。
 
 ### LibSQLStore が 2 つある点に注意
 `index.ts`（Mastra 本体の storage = threads/messages）と `agents/zensuke.ts`（Memory の storage = working memory）で **別々の `LibSQLStore` インスタンス**を生成しているが、どちらも `DATABASE_URL` を参照するので同じファイルを共有する。`DATABASE_URL` が相対パス（`file:./db.sqlite`）だと実行ディレクトリ次第で別ファイルになるため、本番では絶対パス（hostPath）を使っている。
 
-### ワーキングメモリの重要な制約
-`zensuke` は `workingMemory: { scope: "resource" }`。`resourceId` をキーに `mastra_resources` テーブルへ保存され、**同じ `resourceId` の別スレッド（別会話）に system プロンプトとして注入される**ことで会話をまたいで引き継がれる。Studio/Playground では `resourceId` の既定値は agentId。
+### ワーキングメモリ（自前実装している理由）
+`zensuke` は `workingMemory: { scope: "resource" }`。`resourceId` をキーに `mastra_resources` テーブルへ保存され、会話をまたいで引き継がれる（Studio/Playground では `resourceId` の既定値は agentId=`zensuke`）。
 
-**保存が走るのはモデルが `updateWorkingMemory` ツールを「構造化ツール呼び出し」として実行したときだけ**。設定モデル `gemma4:e2b` は小型で、長い markdown 引数を取るこのツールを呼び出せず本文にテキストとして吐いてしまう挙動があり、その場合 `mastra_resources` に何も保存されない（＝会話をまたいで記憶されない）。weather のような単純ツールは呼べるのに memory ツールだけ落ちる、という症状が出る。メモリ機能を確実に動かすには tool calling に強いモデルが必要。
+**Mastra 標準の working memory（自動 `updateWorkingMemory` ツール＋自動 read 注入）が本構成では機能しなかった**ため、保存・読み出しとも自前で実装している:
+
+- **保存**: `src/mastra/tools/workingMemory.ts` の自前 `updateWorkingMemory` ツール（`tools` に登録）。標準のメモリツールはなぜかモデルに渡らない（tools 一覧に出ない）が、`tools` 経由のツールは確実に渡るため。execute 内で `memory.updateWorkingMemory()` を直接呼ぶ。
+- **読み出し（recall）**: `zensuke.ts` の `instructions`（関数）内で `memory.getWorkingMemory()` を読み、保存済みプロフィールを system プロンプトに自前で注入する。標準の自動注入も効かないため。
+
+**provider は `ollama-ai-provider-v2` ではなく `@ai-sdk/openai-compatible`（ollama の `/v1`）を使うこと**。前者だとツール呼び出しが抑制され（0/5）、後者にすると gemma4:e2b でも tool calling が通る（~60%）。gemma は小型ゆえ呼び出し率は完璧ではなく、平叙文での自発呼び出しはプロンプトで強めに促している。
 
 ## デプロイ
 
