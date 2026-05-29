@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { Agent } from "@mastra/core/agent";
 import { Memory } from "@mastra/memory";
 import { LibSQLStore } from "@mastra/libsql";
@@ -8,9 +9,13 @@ import { createUpdateWorkingMemoryTool } from "../tools/workingMemory";
 const baseURL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
 const modelId = process.env.OLLAMA_MODEL ?? "gemma4:e2b";
 const databaseUrl = process.env.DATABASE_URL ?? "file:./db.sqlite";
-// 出力プロセッサ・instructions から working memory を読むための resourceId。
+// instructions から working memory を読むための resourceId。
 // Studio/Playground では resourceId は agentId(=zensuke) になる。
 const resourceId = process.env.WORKING_MEMORY_RESOURCE_ID ?? "zensuke";
+// System Prompt は本番では ConfigMap でマウントしたファイルから読む。
+// ファイルが無いローカル開発時などは BASE_INSTRUCTIONS を使う。
+const instructionsPath =
+  process.env.INSTRUCTIONS_PATH ?? "/etc/zensuke/instructions.md";
 
 const WORKING_MEMORY_TEMPLATE = `# ユーザープロフィール
 - **名前**:
@@ -20,7 +25,7 @@ const WORKING_MEMORY_TEMPLATE = `# ユーザープロフィール
 - **進行中のこと**:
 `;
 
-// ollama-ai-provider-v2 は tool calling が安定しなかったため、ollama の
+// ollama-ai-provider-v2 は Mastra 経由だと tool calling が通らないため、ollama の
 // OpenAI 互換エンドポイント(/v1)を標準の OpenAI 互換プロバイダ経由で使う。
 const ollama = createOpenAICompatible({
   name: "ollama",
@@ -52,18 +57,27 @@ ${WORKING_MEMORY_TEMPLATE}`;
 export const zensuke = new Agent({
   id: "zensuke",
   name: "zensuke",
-  // 保存済みプロフィールをプロンプトに注入する（標準の自動 read 注入が本構成では
-  // 効かないため自前で行う）。会話をまたいだ記憶の引き継ぎはこの注入で実現する。
+  // ベースプロンプトは INSTRUCTIONS_PATH のファイル（本番は ConfigMap）から読む。
+  // 無ければ BASE_INSTRUCTIONS にフォールバック。
+  // あわせて保存済みプロフィールを system プロンプトに自前注入する（標準の自動 read
+  // 注入が本構成では効かないため）。会話をまたいだ記憶の引き継ぎはこの注入で実現する。
   instructions: async () => {
+    let base = BASE_INSTRUCTIONS;
+    try {
+      const content = (await readFile(instructionsPath, "utf8")).trim();
+      if (content.length > 0) base = content;
+    } catch {
+      // ファイル無し → フォールバックを使う
+    }
     try {
       const saved = await memory.getWorkingMemory({ threadId: `wm-${resourceId}`, resourceId });
       if (saved && saved.trim()) {
-        return `${BASE_INSTRUCTIONS}\n\n# 現在記憶しているユーザー情報\n${saved.trim()}`;
+        return `${base}\n\n# 現在記憶しているユーザー情報\n${saved.trim()}`;
       }
     } catch {
       // 読めなければベースのみ
     }
-    return BASE_INSTRUCTIONS;
+    return base;
   },
   model: ollama(modelId),
   tools: {
