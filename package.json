@@ -10,6 +10,7 @@
     "start": "node .mastra/output/index.mjs"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^2.0.48",
     "@mastra/core": "latest",
     "@mastra/libsql": "latest",
     "@mastra/memory": "latest",
