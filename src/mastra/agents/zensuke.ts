@@ -23,5 +23,18 @@ export const zensuke = new Agent({
   tools: { weatherTool },
   memory: new Memory({
     storage: new LibSQLStore({ id: "zensuke-memory", url: databaseUrl }),
+    options: {
+      workingMemory: {
+        enabled: true,
+        scope: "resource",
+        template: `# ユーザープロフィール
+- **名前**:
+- **職種**:
+- **興味・関心**:
+- **コミュニケーションの好み**:
+- **進行中のこと**:
+`,
+      },
+    },
   }),
 });
