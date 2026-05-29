@@ -43,4 +43,5 @@ main push で GitHub Actions が ARM64 ビルドして `ghcr.io/sawa-zen/mastra:
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama サーバの URL (末尾に `/api` は付けない) |
 | `OLLAMA_MODEL` | `gemma4:e2b` | 使用モデル |
 | `DATABASE_URL` | `file:./db.sqlite` | libsql (SQLite) の保存先 |
+| `INSTRUCTIONS_PATH` | `/etc/zensuke/instructions.md` | zensuke の System Prompt ファイル。本番は ConfigMap でマウント。不在時はコード内のフォールバックを使う |
 | `PORT` | `4111` | リッスンポート |
